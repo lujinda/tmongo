@@ -11,16 +11,18 @@ from pymongo import Connection
 def main():
     db = Connection().test
     db = TMongo(db)
-    db.begin()
+    print('begin', list(db.account.find()))
     try:
-        db.account.insert({'uid': 100})
-        raise Exception
+        with db:
+            db.account.insert({'uid': 1})
+            db.account.insert({'uid': 2})
+            db.account.update({'uid': 444}, {'$set': {'uid': 666}})
+            raise Exception
     except Exception as e:
-        db.rollback()
-    finally:
-        db.commit()
+        print(e)
 
-    print(list(db.account.find()))
+    print('after', list(db.account.find()))
+
 
 if __name__ == "__main__":
     main()
