@@ -7,16 +7,18 @@
 # Description   : 
 from tmongo import TMongo
 from pymongo import Connection
+from multiprocessing import Process
 
 def main():
     db = Connection().test
     db = TMongo(db)
-    print('begin', list(db.account.find()))
+    db.account.update({'user': 'a1'}, {'user': 'a1', 'balance': 1000}, upsert = True)
+    db.account.update({'user': 'a2'}, {'user': 'a2', 'balance': 1000}, upsert = True)
+    print('before', list(db.account.find()))
     try:
         with db:
-            db.account.insert({'uid': 1})
-            db.account.insert({'uid': 2})
-            db.account.update({'uid': 444}, {'$set': {'uid': 666}})
+            db.account.update({'user': 'a1'}, {"$inc": {'balance': -500}})
+            db.account.update({'user': 'a2'}, {"$inc": {'balance': 500}})
             raise Exception
     except Exception as e:
         print(e)

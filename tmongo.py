@@ -7,7 +7,7 @@
 # Description   : 
 from pymongo.database import Database as db_type, Collection as coll_type
 from functools import partial
-import time
+from threading import RLock
 
 ROLLBACK_ACTION = ('insert', 'update', 'remove')
 
@@ -22,7 +22,7 @@ class ActionNotSuport(Exception):
         super(ActionNotSuport, self).__init__('%s not suport' % action)
 
 class Transaction():
-    queue = []
+    queue = [] # 这里面会存着一些回滚函数, 当出现异常时，会执行，参数早已通partial绑定好了
     def append(self, rollback_func):
         self.queue.append(rollback_func)
 
@@ -38,13 +38,12 @@ class TCollection():
         self._tran = tran
 
     def __getattr__(self, name):
-        if name not in dir(self._collection):
+        if name not in dir(self._collection): # 比如 db.account.xxx, account是TCollection， 如果xxx不是self._collection的属性，则表示指定的是子文档，就递归返回
             return TCollection(getattr(self._collection, name), self._tran)
         action = name
         if action not in ROLLBACK_ACTION:
-            return getattr(self._collection, action)
-        exec_func = getattr(self, 'execute_' + action)
-        time.sleep(1)
+            return getattr(self._collection, action) # 如果调用得方法不属于支持回滚的操作方法中，则返回原始的属性或方法
+        exec_func = getattr(self, 'execute_' + action) # 反正我封装过的方法
         return exec_func
 
     def __rollback(self, action, args):
@@ -60,8 +59,7 @@ class TCollection():
         _rollback(args)
 
     def _rollback_insert(self, args):
-        for _id in args:
-            self._collection.remove({'_id': _id})
+        self._collection.remove({'_id': {"$in": args}})
 
     def _rollback_remove(self, args):
         self._collection.insert(args)
@@ -70,11 +68,11 @@ class TCollection():
         if (not args) or args[0] == None:
             return
         for arg in args:
-            self._collection.remove({'_id': arg['_id']})
-
-        self._rollback_remove(args)
+            _id = arg['_id']
+            self._collection.update({'_id': _id}, arg)
 
     def execute_insert(self, *args, **kwargs):
+        """封装了insert操作，就是把insert后的_id记起来，回滚操作就是删除这些id"""
         result = self._collection.insert(*args, **kwargs)
 
         self._tran.append((partial(self.__rollback, 'insert'), result))
@@ -82,8 +80,9 @@ class TCollection():
         return result
 
     def execute_remove(self, spec_or_id=None, safe=None, multi=True, **kwargs):
+        """封装了remove操作，就是把remove删除的东西，先find出来，回滚时，insert进去就行了"""
         if not isinstance(spec_or_id, dict):
-            condition = {'_id': spec_or_id}
+            condition = None if spec_or_id == None else{'_id': spec_or_id}
         else:
             condition = spec_or_id
 
@@ -95,19 +94,26 @@ class TCollection():
         return self._collection.remove(spec_or_id, safe, multi, **kwargs)
 
     def execute_update(self, spec, document, upsert=False, manipulate=False, safe=None, multi=False, check_keys=True, **kwargs):
+        """封装了update操作，就是比较麻烦的一个操作，需要判断upsert，如果是True，则会知道是否更新的是已存在的文件，如果是新插入的，回滚处理跟insert一样"""
         result = self.__get_origin_result(spec, multi)
         self._tran.append((partial(self.__rollback, 'update'),
                 result))
 
-        return self._collection.update(spec, document, upsert , 
+        safe = upsert or safe
+        result = self._collection.update(spec, document, upsert , 
                 manipulate, safe, multi, check_keys, **kwargs)
+        if result and result.get('updatedExisting', True) == False:
+            self._tran.append((partial(self.__rollback, 'insert'),
+                result['upserted']))
+
+        return result
+
 
     def __get_origin_result(self, condition, multi):
         if multi == False:
             result = self._collection.find_one(condition)
         else:
             result = list(self._collection.find(condition))
-
 
         return result
 
@@ -116,6 +122,7 @@ class TMongo(object):
         assert isinstance(db, db_type), 'db must pymongo.database.Database'
         self._db = db
         self.tran = None
+        self.lock = RLock()
 
     def __enter__(self):
         self.begin()
@@ -128,6 +135,7 @@ class TMongo(object):
     def begin(self):
         if self.tran:
             raise TransactionNotEnd
+        self.lock.acquire()
 
         self.tran = Transaction()
 
@@ -148,9 +156,11 @@ class TMongo(object):
         if not self.tran:
             raise TransactionNotBegin
         self.tran.rollback()
+        self.end()
 
     def end(self):
         if not self.tran:
             raise TransactionNotBegin
+        self.lock.release()
         self.tran = None
 
