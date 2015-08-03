@@ -12,18 +12,20 @@ from multiprocessing import Process
 def main():
     db = Connection().test
     db = TMongo(db)
-    db.account.update({'user': 'a1'}, {'user': 'a1', 'balance': 1000}, upsert = True)
-    db.account.update({'user': 'a2'}, {'user': 'a2', 'balance': 1000}, upsert = True)
+    # db.account.update({'user': 'a1'}, {'user': 'a1', 'balance': 1000}, upsert = True)
+    # db.account.sub.update({'user': 'a2'}, {'user': 'a2', 'balance': 1000}, upsert = True)
     print('before', list(db.account.find()))
+    print('before', list(db.account.sub.find()))
     try:
         with db:
             db.account.update({'user': 'a1'}, {"$inc": {'balance': -500}})
-            db.account.update({'user': 'a2'}, {"$inc": {'balance': 500}})
+            db.account.sub.update({'user': 'a2'}, {"$inc": {'balance': 500}})
             raise Exception
     except Exception as e:
         print(e)
 
     print('after', list(db.account.find()))
+    print('after', list(db.account.sub.find()))
 
 
 if __name__ == "__main__":
